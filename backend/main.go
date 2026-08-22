@@ -31,6 +31,8 @@ func main() {
 		log.Fatalf("redis connect: %v", err)
 	}
 	defer redisClient.Close()
+	sessions = NewSessionManager(redisClient, accessTokenTTL)
+	mailer := newSMTPMailerFromEnv()
 
 	if err := runMigrations(ctx, pool); err != nil {
 		log.Fatalf("migrations: %v", err)
@@ -50,10 +52,14 @@ func main() {
 
 	// HRMS: auth
 	mux.HandleFunc("/auth/signup", signupHandler(pool))
-	mux.HandleFunc("/auth/signin", signinHandler(pool))
+	mux.HandleFunc("/auth/signin", signinHandler(pool, mailer))
 	mux.HandleFunc("/auth/verify", verifyHandler(pool))
 	mux.HandleFunc("/auth/logout", logoutHandler())
 	mux.HandleFunc("/auth/me", meHandler(pool))
+	mux.HandleFunc("/auth/sessions", sessionsHandler())
+	mux.HandleFunc("/auth/logout-all", logoutAllHandler())
+	mux.HandleFunc("/auth/set-password", activateEmployeeHandler(pool))
+	mux.HandleFunc("/api/employees", createEmployeeHandler(pool, mailer))
 
 	// HRMS: profile
 	mux.HandleFunc("/api/profile/me", func(w http.ResponseWriter, r *http.Request) {

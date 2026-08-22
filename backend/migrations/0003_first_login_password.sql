@@ -1,0 +1,4 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE employee_invitations ALTER COLUMN otp_hash DROP NOT NULL;
+ALTER TABLE employee_invitations ALTER COLUMN expires_at DROP NOT NULL;
+ALTER TABLE employee_invitations ADD COLUMN IF NOT EXISTS otp_sent_at TIMESTAMPTZ;

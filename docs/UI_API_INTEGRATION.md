@@ -25,8 +25,9 @@ be protected by backend authorization.
 
 ### Authentication
 
-Authentication uses a short-lived JWT in an HttpOnly cookie named
-`dayflow_access`. Frontend code must never read or store this JWT.
+Authentication uses a signed JWT in an HttpOnly cookie named `dayflow_access`.
+Each JWT contains a unique session ID backed by Redis, so logout and logout-all
+invalidate it immediately. Frontend code must never read or store this JWT.
 
 Every frontend API request must include credentials:
 
@@ -39,6 +40,12 @@ fetch(`${API_BASE}${path}`, {
 
 The frontend may store the user's role for presentation, but the backend remains
 the authority. On initial page load, use `GET /auth/me` to restore the session.
+
+Session management is identical for admin and employee accounts:
+
+- `GET /auth/sessions` lists the signed-in user's active device sessions.
+- `POST /auth/logout` revokes the current JWT session.
+- `POST /auth/logout-all` revokes all sessions for the signed-in user.
 
 Expected authentication behavior:
 
@@ -476,28 +483,55 @@ department
 status
 ```
 
-#### `POST /api/employees` — Planned, Admin
+#### `POST /api/employees` — Admin
 
-This is the preferred employee onboarding workflow. User and profile creation
-must occur in one database transaction.
-
-Request:
+Creates an employee and emails a cryptographically random temporary password.
+The temporary password is never returned by the API.
 
 ```json
 {
-  "employee_id": "EMP-104",
-  "email": "employee@dayflow.com",
-  "full_name": "Asha Sharma",
-  "phone": "+91 9000000000",
-  "job_title": "Software Engineer",
-  "department": "Engineering",
-  "date_joined": "2026-08-22",
-  "role": "employee"
+  "employee_id": "EMP-1042",
+  "email": "employee@example.com",
+  "full_name": "Example Employee",
+	"phone": "+91 9000000000",
+  "job_title": "Engineer",
+	"department": "Technology",
+	"date_joined": "2026-08-22"
 }
 ```
 
-The backend should issue an activation link or one-time temporary password. It
-must never return a stored password or password hash.
+The employee first submits the emailed temporary password to
+`POST /auth/signin`. A correct first login sends a six-digit email OTP and
+returns:
+
+```json
+{
+  "password_change_required": true,
+  "email": "employee@example.com"
+}
+```
+
+No JWT session is created at this point. The frontend must show the permanent
+password form and submit it to:
+
+```http
+POST /auth/set-password
+```
+
+```json
+{
+  "email": "employee@example.com",
+  "otp": "123456",
+  "password": "new secure password"
+}
+```
+
+After password setup, use the normal `POST /auth/signin` flow. The OTP is
+single-use, expires after 10 minutes, is locked after five failed attempts, and
+cannot be resent more than once per minute.
+
+User, profile, and onboarding-state creation occur in one transaction. The API
+never returns the temporary password, OTP, stored password, or password hash.
 
 #### `GET /api/profile/{user_id}` — Available, Admin
 

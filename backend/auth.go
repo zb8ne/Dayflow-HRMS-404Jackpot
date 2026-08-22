@@ -130,7 +130,7 @@ type signinRequest struct {
 	Password string `json:"password"`
 }
 
-func signinHandler(pool *pgxpool.Pool) http.HandlerFunc {
+func signinHandler(pool *pgxpool.Pool, mailer *SMTPMailer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -145,10 +145,10 @@ func signinHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		var userID int
 		req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 		var passwordHash, role string
-		var emailVerified bool
+		var emailVerified, mustChangePassword bool
 		err := pool.QueryRow(r.Context(),
-			`SELECT id, password_hash, role, email_verified FROM users WHERE lower(email) = $1`, req.Email,
-		).Scan(&userID, &passwordHash, &role, &emailVerified)
+			`SELECT id, password_hash, role, email_verified, must_change_password FROM users WHERE lower(email) = $1`, req.Email,
+		).Scan(&userID, &passwordHash, &role, &emailVerified, &mustChangePassword)
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusUnauthorized, "invalid email or password")
 			return
@@ -165,9 +165,23 @@ func signinHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "verify your email before signing in")
 			return
 		}
+		if mustChangePassword {
+			if err := sendFirstLoginOTP(r.Context(), pool, mailer, userID, req.Email); err != nil {
+				writeError(w, http.StatusServiceUnavailable, "could not send password setup code")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"password_change_required": true, "email": req.Email})
+			return
+		}
 
-		token, err := issueToken(userID, role)
+		session, err := sessions.Create(r.Context(), userID, role, r.UserAgent())
 		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not create session")
+			return
+		}
+		token, err := issueToken(userID, role, session.ID)
+		if err != nil {
+			_ = sessions.Revoke(r.Context(), session.ID)
 			writeError(w, http.StatusInternalServerError, "could not issue token")
 			return
 		}
@@ -182,9 +196,44 @@ func logoutHandler() http.HandlerFunc {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		if sessions != nil {
+			if c, err := parseToken(requestToken(r)); err == nil {
+				_ = sessions.Revoke(r.Context(), c.ID)
+			}
+		}
 		clearAuthCookie(w)
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func sessionsHandler() http.HandlerFunc {
+	return requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		items, err := sessions.List(r.Context(), userID(r), sessionID(r))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not list sessions")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": items})
+	})
+}
+
+func logoutAllHandler() http.HandlerFunc {
+	return requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if err := sessions.RevokeAll(r.Context(), userID(r)); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not revoke sessions")
+			return
+		}
+		clearAuthCookie(w)
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func meHandler(pool *pgxpool.Pool) http.HandlerFunc {
