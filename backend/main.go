@@ -32,7 +32,10 @@ func main() {
 	}
 	defer redisClient.Close()
 	sessions = NewSessionManager(redisClient, accessTokenTTL)
-	mailer := newSMTPMailerFromEnv()
+	mailer, err := newMailerFromEnv()
+	if err != nil {
+		log.Fatalf("email config: %v", err)
+	}
 
 	if err := runMigrations(ctx, pool); err != nil {
 		log.Fatalf("migrations: %v", err)

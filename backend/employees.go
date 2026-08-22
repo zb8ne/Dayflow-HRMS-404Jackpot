@@ -20,7 +20,7 @@ import (
 const invitationTTL = 10 * time.Minute
 const invitationMaxAttempts = 5
 
-func sendFirstLoginOTP(ctx context.Context, pool *pgxpool.Pool, mailer *SMTPMailer, userID int, email string) error {
+func sendFirstLoginOTP(ctx context.Context, pool *pgxpool.Pool, mailer Mailer, userID int, email string) error {
 	if !mailer.Configured() {
 		return fmt.Errorf("email service is not configured")
 	}
@@ -75,7 +75,7 @@ type createEmployeeRequest struct {
 	DateJoined string `json:"date_joined"`
 }
 
-func createEmployeeHandler(pool *pgxpool.Pool, mailer *SMTPMailer) http.HandlerFunc {
+func createEmployeeHandler(pool *pgxpool.Pool, mailer Mailer) http.HandlerFunc {
 	return requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")

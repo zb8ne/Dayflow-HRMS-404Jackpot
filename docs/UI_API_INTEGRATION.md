@@ -4,6 +4,12 @@ This document is the working agreement between the frontend and backend teams.
 It describes the employee and admin experiences, the API endpoints each screen
 uses, and the security and data conventions both teams must follow.
 
+Employee invitation and first-login OTP messages use the backend `Mailer`
+boundary. Railway deployments use Resend over HTTPS with
+`EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, and `EMAIL_FROM`; SMTP remains
+available for local development with `EMAIL_PROVIDER=smtp`. Email provider
+credentials are backend-only environment variables.
+
 > Status legend
 >
 > - **Available**: implemented in the current Go backend.

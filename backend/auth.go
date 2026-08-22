@@ -130,7 +130,7 @@ type signinRequest struct {
 	Password string `json:"password"`
 }
 
-func signinHandler(pool *pgxpool.Pool, mailer *SMTPMailer) http.HandlerFunc {
+func signinHandler(pool *pgxpool.Pool, mailer Mailer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")

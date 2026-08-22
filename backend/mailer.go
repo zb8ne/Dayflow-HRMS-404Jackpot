@@ -1,15 +1,45 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/mail"
 	"net/smtp"
 	"os"
 	"strings"
 	"time"
 )
+
+const resendAPIURL = "https://api.resend.com/emails"
+
+type Mailer interface {
+	Configured() bool
+	Send(to, subject, body string) error
+}
+
+func newMailerFromEnv() (Mailer, error) {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("EMAIL_PROVIDER")))
+	if provider == "" {
+		if os.Getenv("RESEND_API_KEY") != "" || os.Getenv("EMAIL_FROM") != "" {
+			provider = "resend"
+		} else {
+			provider = "smtp"
+		}
+	}
+	switch provider {
+	case "smtp":
+		return newSMTPMailerFromEnv(), nil
+	case "resend":
+		return newResendMailerFromEnv(), nil
+	default:
+		return nil, fmt.Errorf("unsupported EMAIL_PROVIDER %q (use smtp or resend)", provider)
+	}
+}
 
 type SMTPMailer struct {
 	host, port, username, password, from string
@@ -81,4 +111,66 @@ func (m *SMTPMailer) Send(to, subject, body string) error {
 		return err
 	}
 	return client.Quit()
+}
+
+type ResendMailer struct {
+	apiKey   string
+	from     string
+	endpoint string
+	client   *http.Client
+}
+
+func newResendMailerFromEnv() *ResendMailer {
+	return &ResendMailer{
+		apiKey:   strings.TrimSpace(os.Getenv("RESEND_API_KEY")),
+		from:     strings.TrimSpace(os.Getenv("EMAIL_FROM")),
+		endpoint: resendAPIURL,
+		client:   &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+func (m *ResendMailer) Configured() bool {
+	return m != nil && m.apiKey != "" && m.from != "" && m.endpoint != "" && m.client != nil
+}
+
+func (m *ResendMailer) Send(to, subject, body string) error {
+	if !m.Configured() {
+		return fmt.Errorf("Resend is not configured")
+	}
+	if _, err := mail.ParseAddress(to); err != nil {
+		return fmt.Errorf("invalid recipient address")
+	}
+	if _, err := mail.ParseAddress(m.from); err != nil {
+		return fmt.Errorf("invalid sender address")
+	}
+	if strings.ContainsAny(subject, "\r\n") {
+		return fmt.Errorf("invalid email subject")
+	}
+
+	payload, err := json.Marshal(struct {
+		From    string   `json:"from"`
+		To      []string `json:"to"`
+		Subject string   `json:"subject"`
+		Text    string   `json:"text"`
+	}{From: m.from, To: []string{to}, Subject: subject, Text: body})
+	if err != nil {
+		return fmt.Errorf("encode Resend request: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, m.endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("create Resend request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send email with Resend: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("Resend returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
